@@ -94,8 +94,11 @@ int buffer_open(buffer_t* self, char* path) {
         self->is_in_open = 1;
         if (st.st_size >= MLBUF_LARGE_FILE_SIZE) {
             if (_buffer_open_mmap(self, fd, st.st_size) != MLBUF_OK) {
-                rc = MLBUF_ERR;
-                break;
+                // if mmap fails (perhaps because /tmp doesn't exist) fallback to read
+                if (_buffer_open_read(self, fd, st.st_size) != MLBUF_OK) {
+                    rc = MLBUF_ERR;
+                    break;
+                }
             }
         } else {
             if (_buffer_open_read(self, fd, st.st_size) != MLBUF_OK) {
@@ -268,7 +271,7 @@ int buffer_destroy_mark(buffer_t* self, mark_t* mark) {
             && (node->srule->range_a == mark
             ||  node->srule->range_b == mark)
         ) {
-            buffer_remove_srule(self, node->srule);
+            buffer_remove_srule(self, node->srule, 0, 0);
         }
     }
     free(mark);
@@ -356,13 +359,29 @@ int buffer_set_mmapped(buffer_t* self, char* data, bint_t data_len) {
     line_num = 0;
     data_cursor = data;
     data_remaining_len = data_len;
+    char str[1];
     while (1) {
-        data_newline = data_remaining_len > 0
-            ? memchr(data_cursor, '\n', data_remaining_len)
-            : NULL;
-        line_len = data_newline ?
-            (bint_t)(data_newline - data_cursor)
-            : data_remaining_len;
+        data_newline = data_remaining_len > 0 ? memchr(data_cursor, '\n', data_remaining_len) : NULL;
+        if (data_newline) {
+
+            line_len = (bint_t)(data_newline - data_cursor);
+
+            // if the first char isn't a newline
+            if (data_newline != data_cursor) {
+                // copy the previous char to see whether it's a \r\n sequence
+                strncpy(str, data_newline-1, 1);
+                if (strcmp(str, "\r") == 0) { // found! we have a DOS linebreak
+                    line_len--;
+                    data_len--;
+                    data_remaining_len--;
+                }
+            }
+
+        } else {
+            line_len = data_remaining_len;
+        }
+
+
         blines[line_num] = (bline_t){
             .buffer = self,
             .data = data_cursor,
@@ -750,10 +769,21 @@ int buffer_get_offset(buffer_t* self, bline_t* bline, bint_t col, bint_t* ret_of
 }
 
 // Add a style rule to the buffer
-int buffer_add_srule(buffer_t* self, srule_t* srule) {
+int buffer_add_srule(buffer_t* self, srule_t* srule, bint_t start_line_index, bint_t num_lines) {
+
     srule_node_t* node;
     node = calloc(1, sizeof(srule_node_t));
     node->srule = srule;
+
+    bline_t * start_line;
+    if (start_line_index > 0)
+        buffer_get_bline(self, start_line_index, &start_line);
+    else
+        start_line = self->first_line;
+
+    if (num_lines <= 0)
+        num_lines = self->line_count - start_line->line_index;
+
     if (srule->type == MLBUF_SRULE_TYPE_SINGLE) {
         DL_APPEND(self->single_srules, node);
     } else {
@@ -763,15 +793,26 @@ int buffer_add_srule(buffer_t* self, srule_t* srule) {
         srule->range_a->range_srule = srule;
         srule->range_b->range_srule = srule;
     }
-    return buffer_apply_styles(self, self->first_line, self->line_count - 1);
+
+    return buffer_apply_styles(self, start_line, num_lines);
 }
 
 // Remove a style rule from the buffer
-int buffer_remove_srule(buffer_t* self, srule_t* srule) {
+int buffer_remove_srule(buffer_t* self, srule_t* srule, bint_t start_line_index, bint_t num_lines) {
     int found;
     srule_node_t** head;
     srule_node_t* node;
     srule_node_t* node_tmp;
+
+    bline_t * start_line;
+    if (start_line_index > 0)
+        buffer_get_bline(self, start_line_index, &start_line);
+    else
+        start_line = self->first_line;
+
+    if (num_lines <= 0)
+        num_lines = self->line_count - start_line->line_index;
+
     if (srule->type == MLBUF_SRULE_TYPE_SINGLE) {
         head = &self->single_srules;
     } else {
@@ -790,7 +831,7 @@ int buffer_remove_srule(buffer_t* self, srule_t* srule) {
         break;
     }
     if (!found) return MLBUF_ERR;
-    return buffer_apply_styles(self, self->first_line, self->line_count - 1);
+    return buffer_apply_styles(self, start_line, num_lines);
 }
 
 // Set callback to cb. Pass in NULL to unset callback.
@@ -981,6 +1022,9 @@ int buffer_apply_styles(buffer_t* self, bline_t* start_line, bint_t line_delta) 
     if (self->is_style_disabled) {
         return MLBUF_OK;
     }
+
+    // TODO: optimize when line delta is too high
+    // if (line_delta > 10000) printf(" ----- line delta: %ld\n", line_delta);
 
     // min_nlines, minimum number of lines to style
     //     line_delta  < 0: 2 (start_line + 1)
@@ -1426,6 +1470,7 @@ static bline_t* _buffer_bline_new(buffer_t* self) {
     bline_t* bline;
     bline = calloc(1, sizeof(bline_t));
     bline->buffer = self;
+    bline->bg = 0;
     return bline;
 }
 

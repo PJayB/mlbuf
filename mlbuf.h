@@ -82,6 +82,7 @@ struct bline_s {
     int is_chars_dirty;
     int is_slabbed;
     int is_data_slabbed;
+    int bg;
     bline_t* next;
     bline_t* prev;
 };
@@ -182,8 +183,8 @@ int buffer_get_bline_col(buffer_t* self, bint_t offset, bline_t** ret_bline, bin
 int buffer_get_offset(buffer_t* self, bline_t* bline, bint_t col, bint_t* ret_offset);
 int buffer_undo(buffer_t* self);
 int buffer_redo(buffer_t* self);
-int buffer_add_srule(buffer_t* self, srule_t* srule);
-int buffer_remove_srule(buffer_t* self, srule_t* srule);
+int buffer_add_srule(buffer_t* self, srule_t* srule, bint_t start_line_index, bint_t num_lines);
+int buffer_remove_srule(buffer_t* self, srule_t* srule, bint_t start_line_index, bint_t num_lines);
 int buffer_set_callback(buffer_t* self, buffer_callback_t fn_cb, void* udata);
 int buffer_set_tab_width(buffer_t* self, int tab_width);
 int buffer_set_styles_enabled(buffer_t* self, int is_enabled);

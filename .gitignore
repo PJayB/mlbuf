@@ -1,1 +1,5 @@
 .gdb_history
+*.o
+libmlbuf.a
+libmlbuf.so*
+patched
